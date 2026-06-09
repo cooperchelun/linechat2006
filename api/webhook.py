@@ -1,17 +1,76 @@
 from flask import Flask, request, jsonify
 import requests
 from bs4 import BeautifulSoup
+import os
+# 匯入 Google 官方最新的 GenAI SDK
+from google import genai
+from google.genai import types
 
 app = Flask(__name__)
 
+# 初始化 Gemini 客戶端
+client = genai.Client()
+
+def ask_gemini_to_format(keyword, web_content=None):
+    """
+    結合 Gemini 的核心：
+    - 如果有 web_content，叫 Gemini 依據網頁內容進行「去蕪存菁」的攻略整理。
+    - 如果沒有 web_content（爬蟲失敗），叫 Gemini 直接用自身知識庫補足攻略。
+    """
+    # 嚴格的排版格式與角色設定
+    system_instruction = """
+    你是一位精通《原神》的專業攻略大師，同時也是「提瓦特情報局」的 AI 秘書。
+    你的任務是幫旅行者整理出精煉、美觀的角色攻略。
+    
+    請「嚴格依據」以下格式回覆，多運用 Emoji 裝飾，並且絕對不要附帶任何外部網頁連結或廢話：
+
+    ✨【{角色/關鍵字名稱} 核心攻略特輯】✨
+
+    ⚔️ 推薦武器：
+    - 首選五星：[武器名稱] (簡述核心原因)
+    - 四星平民替代：[武器名稱]
+
+    🌸 聖遺物搭配：
+    - 畢業套裝：[聖遺物套裝名稱4件套]
+    - 主屬性推薦：時之沙([屬性]) / 空之杯([屬性]) / 理之冠([屬性])
+
+    👥 推薦熱門配隊：
+    1. [隊伍名稱]：隊員 A + 隊員 B + 隊員 C + 隊員 D
+    
+    💡 小叮嚀：[一句話簡述該角色的操作核心或培養建議]
+    """
+
+    # 根據爬蟲有沒有抓到資料，給 Gemini 不同的 Prompt
+    if web_content:
+        prompt = f"請幫我閱讀以下關於「{keyword}」的網頁原始資料，並將其去蕪存菁，整理成規定的攻略格式：\n\n{web_content}"
+    else:
+        prompt = f"我的爬蟲沒有抓到「{keyword}」的網頁資料。請直接用你內建的最新原神知識庫，幫我生成一份「{keyword}」的完整攻略。"
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.3, # 降低隨機性，確保專有名詞正確
+            )
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"Gemini 處理失敗: {str(e)}")
+        # 如果連 Gemini 都掛了，才走原本的文字兜底
+        if web_content:
+            return f"✨【提瓦特情報局】✨\n\n（AI排版整理失敗，提供網頁原創內容）：\n\n{web_content[:300]}..."
+        return f"🤖 提瓦特情報局 AI 核心受到干擾，請旅行者稍後再試！"
+
+
 def crawl_genshin_info(keyword):
     """
-    極速原神爬蟲：前往 Wiki 直接抓取資料，若失敗則提供預設回覆
+    保留你原本的極速原神爬蟲，但將結果升級交給 Gemini 處理
     """
     if not keyword:
         return "想要查詢什麼原神資料呢？請輸入關鍵字，例如『芙寧娜』或『鍾離』。"
 
-    # 這裡使用一個對爬蟲極度友善且網址規律的中文 Wiki 作為示範來源
     url = f"https://wiki.biligame.com/ys/{keyword}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -21,32 +80,33 @@ def crawl_genshin_info(keyword):
         res = requests.get(url, headers=headers, timeout=8)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            
-            # 嘗試抓取 Wiki 頁面的第一段導言
             mw_output = soup.find('div', class_='mw-parser-output')
+            
             if mw_output:
-                # 找到第一個有字數的段落
                 paragraphs = mw_output.find_all('p')
                 text_content = ""
                 for p in paragraphs:
                     p_text = p.text.strip()
                     if p_text and len(p_text) > 10:
                         text_content += p_text + "\n"
-                    if len(text_content) > 300:
+                    if len(text_content) > 800: # 稍微提高字數限制，讓 Gemini 有更多素材可以整理
                         break
                 
                 if text_content:
-                    return f"✨【提瓦特情報局】✨\n\n為您找到關於「{keyword}」的資料：\n\n{text_content[:350]}...\n\n🔗 詳細攻略查看：{url}"
+                    # 💡【結合點 1】爬蟲成功抓到文字了！把文字送給 Gemini 幫忙排版與整理
+                    return ask_gemini_to_format(keyword, web_content=text_content)
             
-            return f"🔍 找到了「{keyword}」的頁面，但目前無法解析出文字，建議直接前往查看：\n{url}"
+            # 如果有頁面但解析不出文字，讓 Gemini 直接用大腦回答
+            return ask_gemini_to_format(keyword, web_content=None)
         else:
-            # 如果找不到精確匹配，嘗試改用通用搜尋網址引導使用者
-            search_url = f"https://wiki.biligame.com/ys/index.php?search={keyword}"
-            return f"🧭 提瓦特地圖查無此地... 找不到精確的「{keyword}」資料。\n\n你可以嘗試到這裡搜尋看看：\n{search_url}"
+            # 💡【結合點 2】原本找不到網頁（狀態碼不是200，例如芙寧娜）會噴連結
+            # 現在改成：爬蟲找不到沒關係，直接啟動 Gemini 大腦特攻隊來回答！
+            return ask_gemini_to_format(keyword, web_content=None)
             
     except Exception as e:
-        # 防爆機制：即使爬蟲掛了，也會回傳文字，不會讓前端變空白
-        return f"🤖 系統小感冒，暫時無法聯絡派蒙。您可以先到這裡看看：\nhttps://wiki.biligame.com/ys/{keyword}"
+        # 💡【結合點 3】網路超時或掛掉時，同樣交給 Gemini 兜底
+        return ask_gemini_to_format(keyword, web_content=None)
+
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
@@ -57,10 +117,8 @@ def webhook():
 
         query_result = req.get('queryResult', {})
         user_text = query_result.get('queryText', '').strip()
-        intent_name = query_result.get('intent', {}).get('displayName', '')
 
-        # 如果是用戶點擊了 Dialogflow 預設的按鈕（例如點了芙寧娜按鈕）
-        if user_text == "芙寧娜" or intent_name == "SearchCharacter" or user_text:
+        if user_text:
             reply_text = crawl_genshin_info(user_text)
         else:
             reply_text = "歡迎來到提瓦特情報局！請輸入你想查詢的角色或物品名稱。"
@@ -68,12 +126,8 @@ def webhook():
     except Exception as e:
         reply_text = f"Webhook 執行錯誤: {str(e)}"
 
-    # 嚴格符合 Dialogflow 標準的格式回傳
-    response_payload = {
-        "fulfillmentText": reply_text
-    }
-    
-    return jsonify(response_payload)
+    return jsonify({"fulfillmentText": reply_text})
+
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
