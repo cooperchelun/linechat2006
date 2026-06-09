@@ -8,7 +8,10 @@ from google.genai import types
 
 app = Flask(__name__)
 
+# ===============================================================
 # 初始化 Gemini 客戶端
+# 它會自動去讀取你在 Vercel 後台設定的 GEMINI_API_KEY 環境變數
+# ===============================================================
 client = genai.Client()
 
 def ask_gemini_to_format(keyword, web_content=None):
@@ -17,7 +20,7 @@ def ask_gemini_to_format(keyword, web_content=None):
     - 如果有 web_content，叫 Gemini 依據網頁內容進行「去蕪存菁」的攻略整理。
     - 如果沒有 web_content（爬蟲失敗），叫 Gemini 直接用自身知識庫補足攻略。
     """
-    # 嚴格的排版格式與角色設定
+    # 嚴格的排版格式與角色設定，強迫 Gemini 吐出你想要的精美格式
     system_instruction = """
     你是一位精通《原神》的專業攻略大師，同時也是「提瓦特情報局」的 AI 秘書。
     你的任務是幫旅行者整理出精煉、美觀的角色攻略。
@@ -40,7 +43,7 @@ def ask_gemini_to_format(keyword, web_content=None):
     💡 小叮嚀：[一句話簡述該角色的操作核心或培養建議]
     """
 
-    # 根據爬蟲有沒有抓到資料，給 Gemini 不同的 Prompt
+    # 根據爬蟲有沒有抓到資料，給 Gemini 不同的指令
     if web_content:
         prompt = f"請幫我閱讀以下關於「{keyword}」的網頁原始資料，並將其去蕪存菁，整理成規定的攻略格式：\n\n{web_content}"
     else:
@@ -52,16 +55,16 @@ def ask_gemini_to_format(keyword, web_content=None):
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                temperature=0.3, # 降低隨機性，確保專有名詞正確
+                temperature=0.3,  # 降低隨機性，確保專有名詞正確
             )
         )
         return response.text.strip()
     except Exception as e:
         print(f"Gemini 處理失敗: {str(e)}")
-        # 如果連 Gemini 都掛了，才走原本的文字兜底
+        # 安全退回機制：如果 Gemini 呼叫失敗，有網頁文字就加減吐網頁文字，沒網頁文字就給對應提示
         if web_content:
             return f"✨【提瓦特情報局】✨\n\n（AI排版整理失敗，提供網頁原創內容）：\n\n{web_content[:300]}..."
-        return f"🤖 提瓦特情報局 AI 核心受到干擾，請旅行者稍後再試！"
+        return f"🤖 提瓦特情報局 AI 核心受到干擾（可能是 Vercel 的 GEMINI_API_KEY 設定錯誤），請旅行者稍後再試！"
 
 
 def crawl_genshin_info(keyword):
@@ -89,22 +92,21 @@ def crawl_genshin_info(keyword):
                     p_text = p.text.strip()
                     if p_text and len(p_text) > 10:
                         text_content += p_text + "\n"
-                    if len(text_content) > 800: # 稍微提高字數限制，讓 Gemini 有更多素材可以整理
+                    if len(text_content) > 800: # 稍微提高字數，給 Gemini 更多素材
                         break
                 
                 if text_content:
-                    # 💡【結合點 1】爬蟲成功抓到文字了！把文字送給 Gemini 幫忙排版與整理
+                    # 💡【結合點 1】爬蟲成功抓到網頁文字 ➔ 丟給 Gemini 重新排版
                     return ask_gemini_to_format(keyword, web_content=text_content)
             
-            # 如果有頁面但解析不出文字，讓 Gemini 直接用大腦回答
+            # 💡【結合點 2】網頁有抓到但沒解析出有用文字 ➔ 讓 Gemini 用自己的大腦回答
             return ask_gemini_to_format(keyword, web_content=None)
         else:
-            # 💡【結合點 2】原本找不到網頁（狀態碼不是200，例如芙寧娜）會噴連結
-            # 現在改成：爬蟲找不到沒關係，直接啟動 Gemini 大腦特攻隊來回答！
+            # 💡【結合點 3】爬蟲找不到網頁（如芙寧娜 404） ➔ 以前會噴連結，現在直接讓 Gemini 用大腦補足
             return ask_gemini_to_format(keyword, web_content=None)
             
     except Exception as e:
-        # 💡【結合點 3】網路超時或掛掉時，同樣交給 Gemini 兜底
+        # 💡【結合點 4】網路超時或爬蟲掛掉 ➔ 一樣交給 Gemini 兜底
         return ask_gemini_to_format(keyword, web_content=None)
 
 
@@ -118,6 +120,7 @@ def webhook():
         query_result = req.get('queryResult', {})
         user_text = query_result.get('queryText', '').strip()
 
+        # 只要使用者有輸入字，一律交給 crawl_genshin_info 處理（再由它去分流給 Gemini）
         if user_text:
             reply_text = crawl_genshin_info(user_text)
         else:
