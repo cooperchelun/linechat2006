@@ -12,6 +12,11 @@
             text-align: center;
             padding: 50px 20px;
             margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
         }
         .container {
             max-width: 600px;
@@ -41,6 +46,21 @@
             font-weight: bold;
             margin-top: 20px;
         }
+        .guide {
+            margin-top: 30px;
+            font-size: 0.9em;
+            color: #8fa4b3;
+        }
+        
+        /* 讓對話框更有原神風的主題顏色設定 */
+        df-messenger {
+            --df-messenger-bot-message: #2c3147;
+            --df-messenger-button-titlebar-color: #cca566;
+            --df-messenger-chat-background-color: #1c223a;
+            --df-messenger-font-color: #ece5d8;
+            --df-messenger-user-message: #cca566;
+            --df-messenger-user-message-font-color: #111424;
+        }
     </style>
 </head>
 <body>
@@ -50,8 +70,21 @@
         <p>專屬的原神爬蟲 LINE 聊天機器人後端已成功啟動！</p>
         <p>本系統已與 Dialogflow 及 LINE 串接，隨時為旅行者提供最新的角色與攻略資料。</p>
         
-        <div class="status">● 系統運作正常 (Webhook Online)</div>
+        <div class="status">● 網頁與 LINE 雙端同步連線中</div>
+        
+        <div class="guide">
+            💡 <b>如何使用網頁對話？</b><br>
+            請點擊右下角的聊天泡泡圖示，即可開始與 AI 助手對話！
+        </div>
     </div>
+
+    <script src="https://www.gstatic.com/dialogflow-console/fast/messenger/bootstrap.js?v=1"></script>
+    <df-messenger
+      intent="WELCOME"
+      chat-title="提瓦特情報局小助手"
+      agent-id="請替換成你的Agent-ID"  
+      language-code="zh-tw"
+    ></df-messenger>
 
 </body>
 </html>
