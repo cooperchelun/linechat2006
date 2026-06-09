@@ -1,88 +1,74 @@
 from flask import Flask, request, jsonify
 import requests
 from bs4 import BeautifulSoup
-import urllib.parse
 
 app = Flask(__name__)
 
-def crawl_genshin_search(user_question):
+def crawl_genshin_info(keyword):
     """
-    通用爬蟲：將使用者的問題當作關鍵字，前往資料最齊全的 Fandom Wiki 進行內部搜尋，
-    並抓取搜尋結果第一條的詳細內容。
+    極速原神爬蟲：前往 Wiki 直接抓取資料，若失敗則提供預設回覆
     """
-    # 將中文或關鍵字進行 URL 編碼 (例如：芙寧娜 -> %E8%8A%99%E5%AF%A7%E5%A8%9C)
-    encoded_query = urllib.parse.quote(user_question)
-    
-    # 這裡以 Genshin Impact Fandom Wiki 的搜尋功能為例
-    search_url = f"https://genshin-impact.fandom.com/zh/wiki/Special:%E6%90%9C%E7%B4%A2?query={encoded_query}"
+    if not keyword:
+        return "想要查詢什麼原神資料呢？請輸入關鍵字，例如『芙寧娜』或『鍾離』。"
+
+    # 這裡使用一個對爬蟲極度友善且網址規律的中文 Wiki 作為示範來源
+    url = f"https://wiki.biligame.com/ys/{keyword}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     try:
-        # 1. 先去搜尋頁面
-        search_res = requests.get(search_url, headers=headers, timeout=10)
-        if search_res.status_code != 200:
-            return "抱歉，暫時無法連線到原神資料庫。"
+        res = requests.get(url, headers=headers, timeout=8)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
             
-        search_soup = BeautifulSoup(search_res.text, 'html.parser')
-        
-        # 2. 找到搜尋結果的第一個連結
-        result_link_element = search_soup.find('a', class_='unified-search__result__title')
-        
-        if not result_link_element or not result_link_element.get('href'):
-            return f"在資料庫中找不到與「{user_question}」相關的內容，小助手下次會更努力！"
-            
-        target_url = result_link_element['href']
-        
-        # 3. 前往該詳細頁面爬取真正真正的答案
-        detail_res = requests.get(target_url, headers=headers, timeout=10)
-        if detail_res.status_code == 200:
-            detail_soup = BeautifulSoup(detail_res.text, 'html.parser')
-            
-            # 抓取頁面的主要內文段落
-            mw_parser = detail_soup.find('div', class_='mw-parser-output')
-            if mw_parser:
-                paragraphs = mw_parser.find_all('p', recursive=False)
-                
-                # 收集前幾個有內容的段落，組合成回答
-                reply_content = ""
+            # 嘗試抓取 Wiki 頁面的第一段導言
+            mw_output = soup.find('div', class_='mw-parser-output')
+            if mw_output:
+                # 找到第一個有字數的段落
+                paragraphs = mw_output.find_all('p')
+                text_content = ""
                 for p in paragraphs:
-                    text = p.text.strip()
-                    if text:
-                        reply_content += text + "\n"
-                    if len(reply_content) > 400: # 避免字數太多超過 LINE/網頁限制
+                    p_text = p.text.strip()
+                    if p_text and len(p_text) > 10:
+                        text_content += p_text + "\n"
+                    if len(text_content) > 300:
                         break
-                        
-                if reply_content:
-                    return f"【即時爬蟲回報】\n\n{reply_content[:400]}...\n\n🔗 詳細來源：{target_url}"
-                    
-            return "找到了相關網頁，但小助手點進去沒看到文字內容。"
+                
+                if text_content:
+                    return f"✨【提瓦特情報局】✨\n\n為您找到關於「{keyword}」的資料：\n\n{text_content[:350]}...\n\n🔗 詳細攻略查看：{url}"
+            
+            return f"🔍 找到了「{keyword}」的頁面，但目前無法解析出文字，建議直接前往查看：\n{url}"
         else:
-            return "點進詳細資料頁面時失敗了。"
+            # 如果找不到精確匹配，嘗試改用通用搜尋網址引導使用者
+            search_url = f"https://wiki.biligame.com/ys/index.php?search={keyword}"
+            return f"🧭 提瓦特地圖查無此地... 找不到精確的「{keyword}」資料。\n\n你可以嘗試到這裡搜尋看看：\n{search_url}"
             
     except Exception as e:
-        return f"爬蟲運作時發生未預期的錯誤: {str(e)}"
+        # 防爆機制：即使爬蟲掛了，也會回傳文字，不會讓前端變空白
+        return f"🤖 系統小感冒，暫時無法聯絡派蒙。您可以先到這裡看看：\nhttps://wiki.biligame.com/ys/{keyword}"
 
 @app.route('/api/webhook', methods=['POST'])
 def webhook():
-    # 接收來自 Dialogflow 的 JSON 資料
-    req = request.get_json(silent=True, force=True)
-    
-    # 解析使用者「真正說的那句話」
-    query_result = req.get('queryResult', {})
-    user_text = query_result.get('queryText', '') # 這是使用者在 LINE 或網頁上打的原始文字
-    intent_name = query_result.get('intent', {}).get('displayName', '')
-    
-    # 只要觸發了我們設定的查詢意圖，就直接啟動通用爬蟲
-    if intent_name == "SearchCharacter" or user_text:
-        # 呼叫強大的通用爬蟲，直接用使用者打的字去查
-        crawler_result = crawl_genshin_search(user_text)
-        reply_text = crawler_result
-    else:
-        reply_text = "小助手在線中！你想查詢什麼關於原神的事情呢？"
+    try:
+        req = request.get_json(silent=True, force=True)
+        if not req:
+            return jsonify({"fulfillmentText": "後端未收到有效的 JSON 資料。"})
 
-    # 回傳給 Dialogflow 的標準格式
+        query_result = req.get('queryResult', {})
+        user_text = query_result.get('queryText', '').strip()
+        intent_name = query_result.get('intent', {}).get('displayName', '')
+
+        # 如果是用戶點擊了 Dialogflow 預設的按鈕（例如點了芙寧娜按鈕）
+        if user_text == "芙寧娜" or intent_name == "SearchCharacter" or user_text:
+            reply_text = crawl_genshin_info(user_text)
+        else:
+            reply_text = "歡迎來到提瓦特情報局！請輸入你想查詢的角色或物品名稱。"
+
+    except Exception as e:
+        reply_text = f"Webhook 執行錯誤: {str(e)}"
+
+    # 嚴格符合 Dialogflow 標準的格式回傳
     response_payload = {
         "fulfillmentText": reply_text
     }
