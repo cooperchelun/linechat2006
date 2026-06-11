@@ -1,57 +1,36 @@
-const dialogflow = require("@google-cloud/dialogflow");
 const fetch = require("node-fetch");
-
-const projectId = "newagent-nuxi";
-
-const sessionClient = new dialogflow.SessionsClient({
-    credentials: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-});
 
 module.exports = async (req, res) => {
 
-    if (req.method !== "POST") return res.status(200).end();
+    try {
 
-    const event = req.body.events[0];
-    const msg = event.message.text;
-    const replyToken = event.replyToken;
+        const event = req.body.events[0];
+        const msg = event.message.text;
+        const replyToken = event.replyToken;
 
-    // 👉 Dialogflow session
-    const sessionPath = sessionClient.projectAgentSessionPath(
-        projectId,
-        "123456"
-    );
+        console.log("收到訊息：", msg);
 
-    const request = {
-        session: sessionPath,
-        queryInput: {
-            text: {
-                text: msg,
-                languageCode: "zh-TW"
-            }
-        }
-    };
+        // 👉 先不接 Dialogflow，測 LINE 是否正常
+        const replyText = "收到：" + msg;
 
-    const [response] = await sessionClient.detectIntent(request);
+        await fetch("https://api.line.me/v2/bot/message/reply", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+            },
+            body: JSON.stringify({
+                replyToken,
+                messages: [
+                    { type: "text", text: replyText }
+                ]
+            })
+        });
 
-    const result = response.queryResult.fulfillmentText;
+        return res.status(200).end();
 
-    // 👉 回 LINE
-    await fetch("https://api.line.me/v2/bot/message/reply", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-        },
-        body: JSON.stringify({
-            replyToken,
-            messages: [
-                {
-                    type: "text",
-                    text: result || "我還在學習中"
-                }
-            ]
-        })
-    });
-
-    return res.status(200).end();
+    } catch (err) {
+        console.log("ERROR:", err);
+        return res.status(200).end();
+    }
 };
