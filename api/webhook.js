@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 // =========================
-// 🔥 Firebase Init（防重複 + 防 JSON 錯誤）
+// 🔥 Firebase Init（安全版）
 // =========================
 if (!admin.apps.length) {
     try {
@@ -20,7 +20,7 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 // =========================
-// 🚀 SAFE FIREBASE LAYER（防炸核心）
+// 🚀 SAFE QUERY（完全不吃 index）
 // =========================
 async function safeGetHealthLogs(db, userId, limit = 5) {
     try {
@@ -44,7 +44,6 @@ async function safeGetHealthLogs(db, userId, limit = 5) {
             });
         });
 
-        // 不依賴 index（完全穩）
         list.sort((a, b) => b.timestamp - a.timestamp);
 
         return {
@@ -53,13 +52,13 @@ async function safeGetHealthLogs(db, userId, limit = 5) {
         };
 
     } catch (err) {
-        console.log("❌ SAFE FIREBASE ERROR:", err.message);
+        console.log("❌ FIREBASE QUERY ERROR:", err.message);
         return { ok: false, data: [] };
     }
 }
 
 // =========================
-// 🚀 WEBHOOK ENTRY
+// 🚀 WEBHOOK MAIN
 // =========================
 module.exports = async (req, res) => {
     console.log("🔥 WEBHOOK HIT");
@@ -77,16 +76,14 @@ module.exports = async (req, res) => {
         let replyText = "";
 
         // =========================
-        // 🧠 ROUTER
+        // 🧠 COMMAND 判斷
         // =========================
         const isQuery = /紀錄|查詢|查看|我的紀錄|歷史/.test(msg);
 
         // =========================
-        // 📊 查詢模式（Firebase）
+        // 📊 查詢模式（不寫入）
         // =========================
         if (isQuery) {
-
-            console.log("📊 QUERY MODE");
 
             const result = await safeGetHealthLogs(db, userId, 5);
 
@@ -104,17 +101,16 @@ module.exports = async (req, res) => {
         }
 
         // =========================
-        // 🤖 Gemini 症狀分析
+        // 🤖 AI 症狀模式（寫入 Firebase）
         // =========================
         else {
             replyText = await askGemini(msg);
 
-            // 💾 存資料（不影響主流程）
+            // ❗ 只存「非查詢」
             try {
                 await db.collection("health_logs").add({
                     userId,
                     message: msg,
-                    reply: replyText,
                     timestamp: Date.now()
                 });
 
@@ -129,27 +125,24 @@ module.exports = async (req, res) => {
         // =========================
         if (!replyText) replyText = "⚠️ 系統暫時無回應";
 
-        const lineRes = await fetch(
-            "https://api.line.me/v2/bot/message/reply",
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-                },
-                body: JSON.stringify({
-                    replyToken,
-                    messages: [
-                        {
-                            type: "text",
-                            text: replyText.slice(0, 1800) // LINE 安全限制
-                        }
-                    ]
-                })
-            }
-        );
+        await fetch("https://api.line.me/v2/bot/message/reply", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+            },
+            body: JSON.stringify({
+                replyToken,
+                messages: [
+                    {
+                        type: "text",
+                        text: replyText.slice(0, 1800)
+                    }
+                ]
+            })
+        });
 
-        console.log("📡 LINE STATUS:", lineRes.status);
+        console.log("📡 LINE REPLIED");
 
     } catch (err) {
         console.log("❌ WEBHOOK ERROR:", err.message);
@@ -159,7 +152,7 @@ module.exports = async (req, res) => {
 };
 
 // =========================
-// 🤖 GEMINI FUNCTION
+// 🤖 GEMINI
 // =========================
 async function askGemini(message) {
     try {
