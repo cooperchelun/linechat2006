@@ -30,18 +30,7 @@ async function askGemini(message) {
                         {
                             parts: [
                                 {
-                                    text: `
-你是一個健康助理，請用繁體中文回答：
-
-請提供：
-1. 可能原因（簡短）
-2. 建議處理方式
-3. 是否需要就醫（簡單判斷）
-
-注意：不可做醫療診斷，只能健康建議。
-
-症狀：${message}
-`
+                                    text: `你是健康助理，分析症狀：${message}`
                                 }
                             ]
                         }
@@ -52,13 +41,23 @@ async function askGemini(message) {
 
         const data = await res.json();
 
+        console.log("🔥 GEMINI RAW RESPONSE:", JSON.stringify(data, null, 2));
+
+        if (data.error) {
+            return "❌ Gemini API錯誤：" + data.error.message;
+        }
+
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-        return text || "AI暫時無法分析，請稍後再試。";
+        if (!text) {
+            return "❌ Gemini沒有回傳內容（可能被擋或API失敗）";
+        }
+
+        return text;
 
     } catch (err) {
         console.log("❌ GEMINI ERROR:", err);
-        return "AI服務異常，請稍後再試。";
+        return "❌ Gemini請求失敗";
     }
 }
 
