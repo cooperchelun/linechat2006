@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 // =========================
-// 🔥 Firebase Init（防重複）
+// 🔥 Firebase Init
 // =========================
 if (!admin.apps.length) {
     try {
@@ -35,25 +35,54 @@ module.exports = async (req, res) => {
 
         console.log("USER:", msg);
 
-        // =========================
-        // 🤖 Gemini
-        // =========================
-        const replyText = await askGemini(msg);
+        let replyText = "";
 
         // =========================
-        // 💾 Firebase 存資料
+        // 📌 1. 真正 Firebase 查詢
         // =========================
-        try {
-            await db.collection("health_logs").add({
-                userId: userId,
-                message: msg,
-                reply: replyText,
-                timestamp: Date.now()
-            });
+        if (msg.includes("紀錄")) {
 
-            console.log("✅ SAVED TO FIREBASE");
-        } catch (err) {
-            console.log("❌ FIREBASE WRITE ERROR:", err);
+            const snapshot = await db.collection("health_logs")
+                .where("userId", "==", userId)
+                .orderBy("timestamp", "desc")
+                .limit(5)
+                .get();
+
+            if (snapshot.empty) {
+                replyText = "📭 目前沒有紀錄喔";
+            } else {
+                let list = "📋 你的最近紀錄：\n";
+
+                let i = 1;
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    list += `${i}. ${data.message}\n`;
+                    i++;
+                });
+
+                replyText = list;
+            }
+
+        } 
+        // =========================
+        // 📌 2. 一般症狀 → Gemini
+        // =========================
+        else {
+            replyText = await askGemini(msg);
+
+            // 👉 存 Firebase
+            try {
+                await db.collection("health_logs").add({
+                    userId,
+                    message: msg,
+                    reply: replyText,
+                    timestamp: Date.now()
+                });
+
+                console.log("✅ SAVED");
+            } catch (err) {
+                console.log("❌ SAVE ERROR:", err);
+            }
         }
 
         // =========================
@@ -87,7 +116,7 @@ module.exports = async (req, res) => {
 
 
 // =========================
-// 🤖 Gemini Function
+// 🤖 Gemini
 // =========================
 async function askGemini(message) {
     try {
@@ -102,11 +131,11 @@ async function askGemini(message) {
                             text: `
 你是一個LINE健康助理AI。
 
-請用超簡短口語繁體中文回答：
+請用超簡短繁體中文回答：
 
 格式：
 💡可能原因：一句話
-🩺建議：一句話 + 做法
+🩺建議：一句話
 ⚠️就醫判斷：一句話
 
 症狀：${message}
