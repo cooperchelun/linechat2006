@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 // =========================
-// 🔥 Firebase Init
+// 🔥 Firebase Init（穩定版）
 // =========================
 if (!admin.apps.length) {
     try {
@@ -19,28 +19,35 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+// =========================
+// 🚀 MAIN WEBHOOK
+// =========================
 module.exports = async (req, res) => {
     console.log("🔥 WEBHOOK HIT");
 
     try {
         const event = req.body.events?.[0];
+        if (!event || !event.message) return res.status(200).end();
 
-        if (!event || !event.message) {
-            return res.status(200).end();
-        }
-
-        const msg = event.message.text || "";
+        const msg = (event.message.text || "").trim();
         const userId = event.source?.userId || "unknown";
         const replyToken = event.replyToken;
 
-        console.log("USER:", msg);
+        console.log("USER MSG:", msg);
 
         let replyText = "";
 
         // =========================
-        // 📌 1. 真正 Firebase 查詢
+        // 🧠 1. ROUTER（超重要）
         // =========================
-        if (msg.includes("紀錄")) {
+        const isQuery = /紀錄|查詢|查看|歷史|我的紀錄/.test(msg);
+
+        // =========================
+        // 📌 2. Firebase 查詢（最高優先）
+        // =========================
+        if (isQuery) {
+
+            console.log("📊 FIREBASE QUERY MODE");
 
             const snapshot = await db.collection("health_logs")
                 .where("userId", "==", userId)
@@ -49,7 +56,7 @@ module.exports = async (req, res) => {
                 .get();
 
             if (snapshot.empty) {
-                replyText = "📭 目前沒有紀錄喔";
+                replyText = "📭 你還沒有健康紀錄喔";
             } else {
                 let list = "📋 你的最近紀錄：\n";
 
@@ -62,15 +69,16 @@ module.exports = async (req, res) => {
 
                 replyText = list;
             }
+        }
 
-        } 
         // =========================
-        // 📌 2. 一般症狀 → Gemini
+        // 🤖 3. Gemini（症狀 + 一般）
         // =========================
         else {
+
             replyText = await askGemini(msg);
 
-            // 👉 存 Firebase
+            // 💾 存 Firebase（只存症狀）
             try {
                 await db.collection("health_logs").add({
                     userId,
@@ -79,14 +87,14 @@ module.exports = async (req, res) => {
                     timestamp: Date.now()
                 });
 
-                console.log("✅ SAVED");
+                console.log("✅ SAVED TO FIREBASE");
             } catch (err) {
                 console.log("❌ SAVE ERROR:", err);
             }
         }
 
         // =========================
-        // 📩 回 LINE
+        // 📩 LINE 回覆
         // =========================
         await fetch("https://api.line.me/v2/bot/message/reply", {
             method: "POST",
@@ -116,7 +124,7 @@ module.exports = async (req, res) => {
 
 
 // =========================
-// 🤖 Gemini
+// 🤖 Gemini（穩定健康版）
 // =========================
 async function askGemini(message) {
     try {
@@ -129,9 +137,9 @@ async function askGemini(message) {
                     contents: [{
                         parts: [{
                             text: `
-你是一個LINE健康助理AI。
+你是一個LINE健康助理。
 
-請用超簡短繁體中文回答：
+請用繁體中文、超簡短回答：
 
 格式：
 💡可能原因：一句話
@@ -153,6 +161,6 @@ async function askGemini(message) {
 
     } catch (err) {
         console.log("❌ GEMINI ERROR:", err);
-        return "AI錯誤";
+        return "AI錯誤，請稍後再試";
     }
 }
