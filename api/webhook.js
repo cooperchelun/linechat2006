@@ -5,18 +5,17 @@ module.exports = async (req, res) => {
         const event = req.body.events?.[0];
 
         if (!event) {
-            console.log("❌ NO EVENT");
             return res.status(200).end();
         }
 
-        const msg = event.message?.text || "";
+        const msg = event.message?.text || "no message";
         const replyToken = event.replyToken;
 
-        console.log("USER MSG:", msg);
+        console.log("USER:", msg);
 
-        let replyText = "收到：" + msg;
+        // 👉 直接回覆（測試用）
+        const replyText = "收到：" + msg;
 
-        // 👉 最簡單測試（先不要 Gemini / Firebase）
         await fetch("https://api.line.me/v2/bot/message/reply", {
             method: "POST",
             headers: {
@@ -34,10 +33,10 @@ module.exports = async (req, res) => {
             })
         });
 
-        console.log("✅ REPLY SENT");
+        console.log("✅ REPLY OK");
 
     } catch (err) {
-        console.log("❌ WEBHOOK ERROR:", err);
+        console.log("❌ ERROR:", err);
     }
 
     return res.status(200).end();
