@@ -3,17 +3,24 @@ const admin = require("firebase-admin");
 
 // ---------------- Firebase 初始化 ----------------
 if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(
-            JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-        )
-    });
+    try {
+        admin.initializeApp({
+            credential: admin.credential.cert(
+                JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+            )
+        });
+        console.log("🔥 Firebase INIT OK");
+    } catch (err) {
+        console.log("❌ FIREBASE INIT ERROR:", err);
+    }
 }
 
 const db = admin.firestore();
 
-// ---------------- 主程式 ----------------
+// ---------------- 主 webhook ----------------
 module.exports = async (req, res) => {
+
+    console.log("🔥 WEBHOOK HIT");
 
     const event = req.body.events?.[0];
     if (!event || event.type !== "message") {
@@ -28,13 +35,14 @@ module.exports = async (req, res) => {
 
     let replyText = "";
 
-    // ---------------- 查詢功能 ----------------
+    // =========================
+    // 📊 查詢「我的紀錄」
+    // =========================
     if (msg.includes("我的紀錄")) {
 
         try {
             const snapshot = await db.collection("health_logs")
                 .where("userId", "==", userId)
-                .limit(10)
                 .get();
 
             let docs = [];
@@ -43,16 +51,18 @@ module.exports = async (req, res) => {
                 docs.push(doc.data());
             });
 
-            // 手動排序（避免 orderBy 問題）
+            // 手動排序（避免 firestore orderBy 問題）
             docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+            docs = docs.slice(0, 5);
 
             if (docs.length === 0) {
                 replyText = "目前沒有健康紀錄喔～";
             } else {
                 replyText = "📊 最近健康紀錄：\n\n";
 
-                docs.slice(0, 5).forEach((d, i) => {
-                    replyText += `${i + 1}. ${d.message}（${d.risk || "無風險資料"}）\n`;
+                docs.forEach((d, i) => {
+                    replyText += `${i + 1}. ${d.message}（${d.risk || "無風險"}）\n`;
                 });
             }
 
@@ -62,7 +72,9 @@ module.exports = async (req, res) => {
         }
     }
 
-    // ---------------- 症狀判斷 + 存資料 ----------------
+    // =========================
+    // 🧠 症狀判斷 + 存資料
+    // =========================
     else {
 
         let risk = "🟢 低風險";
@@ -86,10 +98,10 @@ module.exports = async (req, res) => {
         // 存 Firebase
         try {
             await db.collection("health_logs").add({
-                userId,
+                userId: userId,
                 message: msg,
-                risk,
-                timestamp: Date.now() // ✅ int64 用這個就對
+                risk: risk,
+                timestamp: Date.now() // int64 OK
             });
 
             console.log("🔥 FIREBASE WRITE OK");
@@ -99,7 +111,9 @@ module.exports = async (req, res) => {
         }
     }
 
-    // ---------------- LINE 回覆 ----------------
+    // =========================
+    // LINE 回覆
+    // =========================
     await fetch("https://api.line.me/v2/bot/message/reply", {
         method: "POST",
         headers: {
