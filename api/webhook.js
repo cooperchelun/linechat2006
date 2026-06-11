@@ -2,26 +2,25 @@ const fetch = require("node-fetch");
 
 module.exports = async (req, res) => {
 
-    if (req.method === "GET") {
-        return res.status(200).json({
-            message: "Line健指部 API 運作中"
-        });
-    }
-
     if (req.method === "POST") {
 
-        const events = req.body.events;
-
-        if (!events || events.length === 0) {
-            return res.status(200).end();
-        }
-
-        const event = events[0];
-
-        const userMessage = event.message.text;
+        const event = req.body.events[0];
+        const msg = event.message.text;
         const replyToken = event.replyToken;
 
-        // 回覆 LINE
+        let replyText = "";
+
+        // 🧠 簡單症狀判斷
+        if (msg.includes("發燒") && msg.includes("喉嚨痛")) {
+            replyText = "可能是：流感或上呼吸道感染\n建議：多休息、多喝水";
+        }
+        else if (msg.includes("頭痛")) {
+            replyText = "可能原因：壓力、睡眠不足或偏頭痛\n建議：休息與補充水分";
+        }
+        else {
+            replyText = "我還在學習這個症狀，可以描述更詳細嗎？";
+        }
+
         await fetch("https://api.line.me/v2/bot/message/reply", {
             method: "POST",
             headers: {
@@ -29,13 +28,8 @@ module.exports = async (req, res) => {
                 "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
             },
             body: JSON.stringify({
-                replyToken: replyToken,
-                messages: [
-                    {
-                        type: "text",
-                        text: `你說的是：${userMessage}`
-                    }
-                ]
+                replyToken,
+                messages: [{ type: "text", text: replyText }]
             })
         });
 
