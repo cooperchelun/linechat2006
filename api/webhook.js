@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 // =========================
-// 🔥 Firebase Init（防重複 + 防 JSON 錯誤）
+// 🔥 Firebase Init
 // =========================
 if (!admin.apps.length) {
     try {
@@ -13,63 +13,24 @@ if (!admin.apps.length) {
 
         console.log("🔥 Firebase INIT OK");
     } catch (err) {
-        console.log("❌ Firebase INIT ERROR:", err.message);
+        console.log("❌ Firebase INIT ERROR:", err);
     }
 }
 
 const db = admin.firestore();
 
-// =========================
-// 🚀 SAFE FIREBASE LAYER（防炸核心）
-// =========================
-async function safeGetHealthLogs(db, userId, limit = 5) {
-    try {
-        if (!userId) return { ok: false, data: [] };
-
-        const snapshot = await db.collection("health_logs")
-            .where("userId", "==", userId)
-            .get();
-
-        let list = [];
-
-        snapshot.forEach(doc => {
-            const d = doc.data();
-
-            list.push({
-                message: d.message || "（無內容）",
-                timestamp:
-                    typeof d.timestamp === "number"
-                        ? d.timestamp
-                        : d.timestamp?.toMillis?.() || 0
-            });
-        });
-
-        // 不依賴 index（完全穩）
-        list.sort((a, b) => b.timestamp - a.timestamp);
-
-        return {
-            ok: true,
-            data: list.slice(0, limit)
-        };
-
-    } catch (err) {
-        console.log("❌ SAFE FIREBASE ERROR:", err.message);
-        return { ok: false, data: [] };
-    }
-}
-
-// =========================
-// 🚀 WEBHOOK ENTRY
-// =========================
 module.exports = async (req, res) => {
     console.log("🔥 WEBHOOK HIT");
 
     try {
         const event = req.body.events?.[0];
-        if (!event || !event.message) return res.status(200).end();
 
-        const msg = (event.message.text || "").trim();
-        const userId = event.source?.userId;
+        if (!event || !event.message) {
+            return res.status(200).end();
+        }
+
+        const msg = event.message.text || "";
+        const userId = event.source?.userId || "unknown";
         const replyToken = event.replyToken;
 
         console.log("USER:", msg);
@@ -77,39 +38,39 @@ module.exports = async (req, res) => {
         let replyText = "";
 
         // =========================
-        // 🧠 ROUTER
+        // 📌 1. 真正 Firebase 查詢
         // =========================
-        const isQuery = /紀錄|查詢|查看|我的紀錄|歷史/.test(msg);
+        if (msg.includes("紀錄")) {
 
-        // =========================
-        // 📊 查詢模式（Firebase）
-        // =========================
-        if (isQuery) {
+            const snapshot = await db.collection("health_logs")
+                .where("userId", "==", userId)
+                .orderBy("timestamp", "desc")
+                .limit(5)
+                .get();
 
-            console.log("📊 QUERY MODE");
-
-            const result = await safeGetHealthLogs(db, userId, 5);
-
-            if (!result.ok || result.data.length === 0) {
-                replyText = "📭 目前沒有健康紀錄";
+            if (snapshot.empty) {
+                replyText = "📭 目前沒有紀錄喔";
             } else {
-                let text = "📋 最近健康紀錄：\n";
+                let list = "📋 你的最近紀錄：\n";
 
-                result.data.forEach((d, i) => {
-                    text += `${i + 1}. ${d.message}\n`;
+                let i = 1;
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    list += `${i}. ${data.message}\n`;
+                    i++;
                 });
 
-                replyText = text;
+                replyText = list;
             }
-        }
 
+        } 
         // =========================
-        // 🤖 Gemini 症狀分析
+        // 📌 2. 一般症狀 → Gemini
         // =========================
         else {
             replyText = await askGemini(msg);
 
-            // 💾 存資料（不影響主流程）
+            // 👉 存 Firebase
             try {
                 await db.collection("health_logs").add({
                     userId,
@@ -120,46 +81,42 @@ module.exports = async (req, res) => {
 
                 console.log("✅ SAVED");
             } catch (err) {
-                console.log("❌ SAVE ERROR:", err.message);
+                console.log("❌ SAVE ERROR:", err);
             }
         }
 
         // =========================
-        // 📩 LINE REPLY
+        // 📩 回 LINE
         // =========================
-        if (!replyText) replyText = "⚠️ 系統暫時無回應";
+        await fetch("https://api.line.me/v2/bot/message/reply", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+            },
+            body: JSON.stringify({
+                replyToken,
+                messages: [
+                    {
+                        type: "text",
+                        text: replyText
+                    }
+                ]
+            })
+        });
 
-        const lineRes = await fetch(
-            "https://api.line.me/v2/bot/message/reply",
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-                },
-                body: JSON.stringify({
-                    replyToken,
-                    messages: [
-                        {
-                            type: "text",
-                            text: replyText.slice(0, 1800) // LINE 安全限制
-                        }
-                    ]
-                })
-            }
-        );
-
-        console.log("📡 LINE STATUS:", lineRes.status);
+        console.log("✅ REPLY SENT");
 
     } catch (err) {
-        console.log("❌ WEBHOOK ERROR:", err.message);
+        console.log("❌ WEBHOOK ERROR:", err);
     }
 
     return res.status(200).end();
 };
 
+
 // =========================
-// 🤖 GEMINI FUNCTION
+// 🤖 Gemini
 // =========================
 async function askGemini(message) {
     try {
@@ -169,38 +126,33 @@ async function askGemini(message) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    contents: [
-                        {
-                            parts: [
-                                {
-                                    text: `
+                    contents: [{
+                        parts: [{
+                            text: `
 你是一個LINE健康助理AI。
 
-請用繁體中文、超簡短回答：
+請用超簡短繁體中文回答：
 
+格式：
 💡可能原因：一句話
 🩺建議：一句話
 ⚠️就醫判斷：一句話
 
 症狀：${message}
 `
-                                }
-                            ]
-                        }
-                    ]
+                        }]
+                    }]
                 })
             }
         );
 
         const data = await res.json();
 
-        return (
-            data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-            "AI暫時無法回應"
-        );
+        return data?.candidates?.[0]?.content?.parts?.[0]?.text
+            || "AI暫時無法回應";
 
     } catch (err) {
-        console.log("❌ GEMINI ERROR:", err.message);
-        return "AI錯誤，請稍後再試";
+        console.log("❌ GEMINI ERROR:", err);
+        return "AI錯誤";
     }
 }
