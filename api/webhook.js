@@ -1,5 +1,5 @@
 module.exports = async (req, res) => {
-    console.log("🔥 LINE 有打進來");
+    console.log("🔥 HIT WEBHOOK");
 
     return res.status(200).json({
         ok: true
