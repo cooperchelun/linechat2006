@@ -1,3 +1,24 @@
+const admin = require("firebase-admin");
+
+// =========================
+// 🔥 Firebase Init（防重複）
+// =========================
+if (!admin.apps.length) {
+    try {
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+
+        console.log("🔥 Firebase INIT OK");
+    } catch (err) {
+        console.log("❌ Firebase INIT ERROR:", err);
+    }
+}
+
+const db = admin.firestore();
+
 module.exports = async (req, res) => {
     console.log("🔥 WEBHOOK HIT");
 
@@ -9,14 +30,35 @@ module.exports = async (req, res) => {
         }
 
         const msg = event.message.text || "";
+        const userId = event.source?.userId || "unknown";
         const replyToken = event.replyToken;
 
         console.log("USER:", msg);
 
-        // ===== 呼叫 Gemini =====
+        // =========================
+        // 🤖 Gemini
+        // =========================
         const replyText = await askGemini(msg);
 
-        // ===== 回覆 LINE =====
+        // =========================
+        // 💾 Firebase 存資料
+        // =========================
+        try {
+            await db.collection("health_logs").add({
+                userId: userId,
+                message: msg,
+                reply: replyText,
+                timestamp: Date.now()
+            });
+
+            console.log("✅ SAVED TO FIREBASE");
+        } catch (err) {
+            console.log("❌ FIREBASE WRITE ERROR:", err);
+        }
+
+        // =========================
+        // 📩 回 LINE
+        // =========================
         await fetch("https://api.line.me/v2/bot/message/reply", {
             method: "POST",
             headers: {
@@ -44,9 +86,9 @@ module.exports = async (req, res) => {
 };
 
 
-// ============================
+// =========================
 // 🤖 Gemini Function
-// ============================
+// =========================
 async function askGemini(message) {
     try {
         const res = await fetch(
@@ -55,57 +97,33 @@ async function askGemini(message) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    contents: [
-                        {
-                            parts: [
-                                {
-                                    text: `
+                    contents: [{
+                        parts: [{
+                            text: `
 你是一個LINE健康助理AI。
 
-請用超簡短、口語繁體中文回答（像LINE聊天）。
-
-規則：
-- 最多6行
-- 不要長文
-- 不要醫療論文
-- 直接重點
+請用超簡短口語繁體中文回答：
 
 格式：
-
 💡可能原因：一句話
-🩺建議：一句話 + 1~2做法
+🩺建議：一句話 + 做法
 ⚠️就醫判斷：一句話
 
 症狀：${message}
 `
-                                }
-                            ]
-                        }
-                    ]
+                        }]
+                    }]
                 })
             }
         );
 
-        if (!res.ok) {
-            const errText = await res.text();
-            console.log("❌ GEMINI HTTP ERROR:", errText);
-            return "AI服務異常，請稍後再試";
-        }
-
         const data = await res.json();
 
-        console.log("🔥 GEMINI RAW:", JSON.stringify(data));
-
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!text) {
-            return "AI暫時無法回應";
-        }
-
-        return text;
+        return data?.candidates?.[0]?.content?.parts?.[0]?.text
+            || "AI暫時無法回應";
 
     } catch (err) {
         console.log("❌ GEMINI ERROR:", err);
-        return "AI系統錯誤";
+        return "AI錯誤";
     }
 }
