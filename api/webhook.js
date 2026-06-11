@@ -11,13 +11,13 @@ if (!admin.apps.length) {
         });
         console.log("🔥 Firebase INIT OK");
     } catch (err) {
-        console.log("❌ FIREBASE INIT ERROR:", err);
+        console.log("❌ Firebase INIT ERROR:", err);
     }
 }
 
 const db = admin.firestore();
 
-// ---------------- 主 webhook ----------------
+// ---------------- webhook 主程式 ----------------
 module.exports = async (req, res) => {
 
     console.log("🔥 WEBHOOK HIT");
@@ -36,24 +36,28 @@ module.exports = async (req, res) => {
     let replyText = "";
 
     // =========================
-    // 📊 查詢「我的紀錄」
+    // 📊 查詢：我的紀錄（穩定版）
     // =========================
     if (msg.includes("我的紀錄")) {
 
         try {
-            const snapshot = await db.collection("health_logs")
-                .where("userId", "==", userId)
-                .get();
+            const snapshot = await db.collection("health_logs").get();
 
             let docs = [];
 
             snapshot.forEach(doc => {
-                docs.push(doc.data());
+                const data = doc.data();
+
+                // 手動過濾 userId（避免 query 問題）
+                if (data.userId === userId) {
+                    docs.push(data);
+                }
             });
 
-            // 手動排序（避免 firestore orderBy 問題）
+            // 排序（最新在前）
             docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
+            // 只取前5筆
             docs = docs.slice(0, 5);
 
             if (docs.length === 0) {
@@ -62,7 +66,7 @@ module.exports = async (req, res) => {
                 replyText = "📊 最近健康紀錄：\n\n";
 
                 docs.forEach((d, i) => {
-                    replyText += `${i + 1}. ${d.message}（${d.risk || "無風險"}）\n`;
+                    replyText += `${i + 1}. ${d.message}（${d.risk}）\n`;
                 });
             }
 
@@ -98,10 +102,10 @@ module.exports = async (req, res) => {
         // 存 Firebase
         try {
             await db.collection("health_logs").add({
-                userId: userId,
+                userId,
                 message: msg,
-                risk: risk,
-                timestamp: Date.now() // int64 OK
+                risk,
+                timestamp: Date.now()
             });
 
             console.log("🔥 FIREBASE WRITE OK");
