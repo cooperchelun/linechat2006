@@ -1,7 +1,7 @@
 const fetch = require("node-fetch");
 const admin = require("firebase-admin");
 
-// ---------------- Firebase 初始化 ----------------
+// ================= Firebase 初始化 =================
 if (!admin.apps.length) {
     try {
         admin.initializeApp({
@@ -17,7 +17,16 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// ---------------- webhook 主程式 ----------------
+// ================= 使用聲明 =================
+const disclaimer = `歡迎使用「Line健指部｜健康管理助理」。
+
+本系統提供健康紀錄與症狀初步分析，僅供健康參考與教育用途，非醫療診斷。
+
+若有緊急症狀請立即就醫。
+
+輸入「同意」即可開始使用。`;
+
+// ================= 主程式 =================
 module.exports = async (req, res) => {
 
     console.log("🔥 WEBHOOK HIT");
@@ -36,9 +45,16 @@ module.exports = async (req, res) => {
     let replyText = "";
 
     // =========================
-    // 📊 查詢：我的紀錄（穩定版）
+    // 📌 第一次使用 / 說明
     // =========================
-    if (msg.includes("我的紀錄")) {
+    if (msg.includes("hi") || msg.includes("說明")) {
+        replyText = disclaimer;
+    }
+
+    // =========================
+    // 📊 查詢紀錄
+    // =========================
+    else if (msg.includes("我的紀錄")) {
 
         try {
             const snapshot = await db.collection("health_logs").get();
@@ -46,25 +62,19 @@ module.exports = async (req, res) => {
             let docs = [];
 
             snapshot.forEach(doc => {
-                const data = doc.data();
-
-                // 手動過濾 userId（避免 query 問題）
-                if (data.userId === userId) {
-                    docs.push(data);
+                const d = doc.data();
+                if (d.userId === userId) {
+                    docs.push(d);
                 }
             });
 
-            // 排序（最新在前）
             docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
-            // 只取前5筆
             docs = docs.slice(0, 5);
 
             if (docs.length === 0) {
                 replyText = "目前沒有健康紀錄喔～";
             } else {
                 replyText = "📊 最近健康紀錄：\n\n";
-
                 docs.forEach((d, i) => {
                     replyText += `${i + 1}. ${d.message}（${d.risk}）\n`;
                 });
@@ -96,7 +106,7 @@ module.exports = async (req, res) => {
             replyText = "可能是壓力或睡眠不足";
         }
         else {
-            replyText = "請描述更詳細症狀（例如：發燒、頭痛、喉嚨痛）";
+            replyText = "請描述更詳細症狀（發燒 / 頭痛 / 喉嚨痛）";
         }
 
         // 存 Firebase
