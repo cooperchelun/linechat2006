@@ -1,3 +1,6 @@
+module.exports = async (req, res) => {
+    console.log("🔥 webhook 有進來");
+    
 const dialogflow = require("@google-cloud/dialogflow");
 const { v4: uuidv4 } = require("uuid");
 const fetch = require("node-fetch");
