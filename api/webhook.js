@@ -1,4 +1,16 @@
 const fetch = require("node-fetch");
+const admin = require("firebase-admin");
+
+// 初始化 Firebase（只會跑一次）
+if (!admin.apps.length) {
+    admin.initializeApp({
+        credential: admin.credential.cert(
+            JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+        )
+    });
+}
+
+const db = admin.firestore();
 
 module.exports = async (req, res) => {
 
@@ -9,71 +21,47 @@ module.exports = async (req, res) => {
 
     const msg = event.message.text;
     const replyToken = event.replyToken;
+    const userId = event.source.userId;
 
     console.log("USER:", msg);
 
     let replyText = "";
-    let level = "🟢 低風險";
+    let risk = "🟢 低風險";
 
-    // -----------------------------
-    // 🧠 症狀 AI 規則引擎
-    // -----------------------------
-
+    // ---------------- AI 判斷 ----------------
     if (msg.includes("發燒") && msg.includes("喉嚨痛")) {
-        level = "🔴 中高風險";
-        replyText =
-            "可能疾病：流感 / 上呼吸道感染\n" +
-            "建議：多休息、多喝水、觀察體溫\n" +
-            "⚠ 若持續高燒請就醫";
+        risk = "🔴 中高風險";
+        replyText = "可能是流感或上呼吸道感染\n建議多休息、多喝水";
     }
-
     else if (msg.includes("發燒")) {
-        level = "🟠 中風險";
-        replyText =
-            "可能原因：病毒感染或感冒\n" +
-            "建議：補充水分、休息\n" +
-            "⚠ 若超過3天未退燒請就醫";
+        risk = "🟠 中風險";
+        replyText = "可能是病毒感染\n建議休息觀察";
     }
-
-    else if (msg.includes("頭痛") && msg.includes("疲勞")) {
-        level = "🟠 中風險";
-        replyText =
-            "可能原因：壓力過大或睡眠不足\n" +
-            "建議：調整作息、減少螢幕時間";
-    }
-
     else if (msg.includes("頭痛")) {
-        level = "🟡 低中風險";
-        replyText =
-            "可能原因：壓力、睡眠不足或脫水\n" +
-            "建議：補水與休息";
+        risk = "🟡 低中風險";
+        replyText = "可能是壓力或睡眠不足";
     }
-
-    else if (msg.includes("肚子痛") || msg.includes("腹痛")) {
-        level = "🟠 中風險";
-        replyText =
-            "可能原因：腸胃不適或飲食問題\n" +
-            "建議：避免油膩食物、多休息\n" +
-            "⚠ 若劇痛請就醫";
-    }
-
-    else if (msg.includes("拉肚子")) {
-        level = "🟠 中風險";
-        replyText =
-            "可能是腸胃炎\n建議：補充水分與電解質";
-    }
-
     else {
-        level = "🟢 低風險";
-        replyText =
-            "我還在學習你的症狀 🤖\n" +
-            "可以試著輸入：發燒、頭痛、肚子痛";
+        risk = "🟢 低風險";
+        replyText = "請描述更詳細症狀";
     }
 
-    // -----------------------------
-    // 📩 回覆 LINE
-    // -----------------------------
+    // ---------------- 存 Firebase ----------------
+    try {
+        await db.collection("health_logs").add({
+            userId,
+            message: msg,
+            risk,
+            result: replyText,
+            timestamp: Date.now()
+        });
 
+        console.log("🔥 已寫入 Firebase");
+    } catch (err) {
+        console.log("❌ Firebase error:", err);
+    }
+
+    // ---------------- 回 LINE ----------------
     await fetch("https://api.line.me/v2/bot/message/reply", {
         method: "POST",
         headers: {
@@ -85,7 +73,7 @@ module.exports = async (req, res) => {
             messages: [
                 {
                     type: "text",
-                    text: `【健康評估】${level}\n\n${replyText}`
+                    text: `【健康評估】${risk}\n\n${replyText}`
                 }
             ]
         })
