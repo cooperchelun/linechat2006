@@ -1,7 +1,7 @@
 const dialogflow = require("@google-cloud/dialogflow");
 const fetch = require("node-fetch");
 
-const projectId = "你的PROJECT_ID";
+const projectId = "newagent-nuxi";
 
 const sessionClient = new dialogflow.SessionsClient({
     credentials: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
