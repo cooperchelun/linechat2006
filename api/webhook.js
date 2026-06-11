@@ -17,16 +17,52 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// ================= 使用聲明 =================
-const disclaimer = `歡迎使用「Line健指部｜健康管理助理」。
+// ================= Gemini AI =================
+async function askGemini(message) {
+    try {
+        const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [
+                        {
+                            parts: [
+                                {
+                                    text: `
+你是一個健康助理，請用繁體中文回答：
 
-本系統提供健康紀錄與症狀初步分析，僅供健康參考與教育用途，非醫療診斷。
+請提供：
+1. 可能原因（簡短）
+2. 建議處理方式
+3. 是否需要就醫（簡單判斷）
 
-若有緊急症狀請立即就醫。
+注意：不可做醫療診斷，只能健康建議。
 
-輸入「同意」即可開始使用。`;
+症狀：${message}
+`
+                                }
+                            ]
+                        }
+                    ]
+                })
+            }
+        );
 
-// ================= 主程式 =================
+        const data = await res.json();
+
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        return text || "AI暫時無法分析，請稍後再試。";
+
+    } catch (err) {
+        console.log("❌ GEMINI ERROR:", err);
+        return "AI服務異常，請稍後再試。";
+    }
+}
+
+// ================= 主 webhook =================
 module.exports = async (req, res) => {
 
     console.log("🔥 WEBHOOK HIT");
@@ -44,16 +80,26 @@ module.exports = async (req, res) => {
 
     let replyText = "";
 
-    // =========================
-    // 📌 第一次使用 / 說明
-    // =========================
+    // ================= 說明 / hi =================
     if (msg.includes("hi") || msg.includes("說明")) {
-        replyText = disclaimer;
+
+        replyText =
+`歡迎使用「Line健指部｜健康AI助理」
+
+📌 功能：
+1. 症狀分析
+2. 健康建議
+3. 個人紀錄查詢
+
+⚠️ 本系統僅供健康參考，不是醫療診斷
+
+輸入症狀即可開始使用，例如：
+👉 我發燒
+👉 頭痛`;
+
     }
 
-    // =========================
-    // 📊 查詢紀錄
-    // =========================
+    // ================= 查詢紀錄 =================
     else if (msg.includes("我的紀錄")) {
 
         try {
@@ -76,7 +122,7 @@ module.exports = async (req, res) => {
             } else {
                 replyText = "📊 最近健康紀錄：\n\n";
                 docs.forEach((d, i) => {
-                    replyText += `${i + 1}. ${d.message}（${d.risk}）\n`;
+                    replyText += `${i + 1}. ${d.message}（${d.risk || "無"}）\n`;
                 });
             }
 
@@ -86,35 +132,17 @@ module.exports = async (req, res) => {
         }
     }
 
-    // =========================
-    // 🧠 症狀判斷 + 存資料
-    // =========================
+    // ================= Gemini AI 分析 =================
     else {
 
-        let risk = "🟢 低風險";
-
-        if (msg.includes("發燒") && msg.includes("喉嚨痛")) {
-            risk = "🔴 中高風險";
-            replyText = "可能是流感或上呼吸道感染\n建議多休息、多喝水";
-        }
-        else if (msg.includes("發燒")) {
-            risk = "🟠 中風險";
-            replyText = "可能是病毒感染\n建議休息觀察";
-        }
-        else if (msg.includes("頭痛")) {
-            risk = "🟡 低中風險";
-            replyText = "可能是壓力或睡眠不足";
-        }
-        else {
-            replyText = "請描述更詳細症狀（發燒 / 頭痛 / 喉嚨痛）";
-        }
+        replyText = await askGemini(msg);
 
         // 存 Firebase
         try {
             await db.collection("health_logs").add({
                 userId,
                 message: msg,
-                risk,
+                aiReply: replyText,
                 timestamp: Date.now()
             });
 
@@ -125,25 +153,27 @@ module.exports = async (req, res) => {
         }
     }
 
-    // =========================
-    // LINE 回覆
-    // =========================
-    await fetch("https://api.line.me/v2/bot/message/reply", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-        },
-        body: JSON.stringify({
-            replyToken,
-            messages: [
-                {
-                    type: "text",
-                    text: replyText
-                }
-            ]
-        })
-    });
+    // ================= LINE 回覆 =================
+    try {
+        await fetch("https://api.line.me/v2/bot/message/reply", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+            },
+            body: JSON.stringify({
+                replyToken,
+                messages: [
+                    {
+                        type: "text",
+                        text: replyText
+                    }
+                ]
+            })
+        });
+    } catch (err) {
+        console.log("❌ LINE REPLY ERROR:", err);
+    }
 
     return res.status(200).end();
 };
