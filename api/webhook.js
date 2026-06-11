@@ -6,42 +6,33 @@ module.exports = async (req, res) => {
 
     const event = req.body.events?.[0];
 
-    if (!event || event.type !== "message") {
-        return res.status(200).end();
-    }
+    if (!event) return res.status(200).end();
 
     const msg = event.message.text;
     const replyToken = event.replyToken;
 
-    console.log("USER MSG:", msg);
+    const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-    let replyText = "";
+    console.log("TOKEN EXISTS?", !!token);
 
-    // 🧠 簡單AI判斷（先不要Dialogflow）
-    if (msg.includes("發燒") && msg.includes("喉嚨痛")) {
-        replyText = "可能是流感或上呼吸道感染\n建議多休息、多喝水";
-    } else if (msg.includes("頭痛")) {
-        replyText = "可能是壓力或睡眠不足\n建議休息與補水";
-    } else {
-        replyText = "收到：" + msg;
-    }
+    const replyText = "收到：" + msg;
 
-    await fetch("https://api.line.me/v2/bot/message/reply", {
+    const result = await fetch("https://api.line.me/v2/bot/message/reply", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+            "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify({
-            replyToken: replyToken,
-            messages: [
-                {
-                    type: "text",
-                    text: replyText
-                }
-            ]
+            replyToken,
+            messages: [{ type: "text", text: replyText }]
         })
     });
+
+    const data = await result.text();
+
+    console.log("LINE RESPONSE STATUS:", result.status);
+    console.log("LINE RESPONSE:", data);
 
     return res.status(200).end();
 };
