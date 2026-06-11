@@ -1,7 +1,7 @@
 const fetch = require("node-fetch");
 const admin = require("firebase-admin");
 
-// Firebase 初始化（防止重複初始化）
+// ---------------- Firebase 初始化 ----------------
 if (!admin.apps.length) {
     admin.initializeApp({
         credential: admin.credential.cert(
@@ -12,6 +12,7 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+// ---------------- 主程式 ----------------
 module.exports = async (req, res) => {
 
     const event = req.body.events?.[0];
@@ -27,43 +28,41 @@ module.exports = async (req, res) => {
 
     let replyText = "";
 
-    // -------------------------------
-    // 🔍 查詢功能（重點）
-    // -------------------------------
+    // ---------------- 查詢功能 ----------------
     if (msg.includes("我的紀錄")) {
 
         try {
             const snapshot = await db.collection("health_logs")
                 .where("userId", "==", userId)
-                .orderBy("timestamp", "desc")
-                .limit(5)
+                .limit(10)
                 .get();
 
-            if (snapshot.empty) {
+            let docs = [];
+
+            snapshot.forEach(doc => {
+                docs.push(doc.data());
+            });
+
+            // 手動排序（避免 orderBy 問題）
+            docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+            if (docs.length === 0) {
                 replyText = "目前沒有健康紀錄喔～";
             } else {
-                let list = "📊 最近健康紀錄：\n";
+                replyText = "📊 最近健康紀錄：\n\n";
 
-                let index = 1;
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    list += `${index}. ${data.message}\n`;
-                    index++;
+                docs.slice(0, 5).forEach((d, i) => {
+                    replyText += `${i + 1}. ${d.message}（${d.risk || "無風險資料"}）\n`;
                 });
-
-                replyText = list;
             }
 
         } catch (err) {
             console.log("❌ QUERY ERROR:", err);
             replyText = "查詢失敗，請稍後再試";
         }
-
     }
 
-    // -------------------------------
-    // 🧠 一般症狀判斷 + 存資料
-    // -------------------------------
+    // ---------------- 症狀判斷 + 存資料 ----------------
     else {
 
         let risk = "🟢 低風險";
@@ -81,7 +80,7 @@ module.exports = async (req, res) => {
             replyText = "可能是壓力或睡眠不足";
         }
         else {
-            replyText = "請描述更詳細症狀";
+            replyText = "請描述更詳細症狀（例如：發燒、頭痛、喉嚨痛）";
         }
 
         // 存 Firebase
@@ -90,19 +89,17 @@ module.exports = async (req, res) => {
                 userId,
                 message: msg,
                 risk,
-                timestamp: Date.now()
+                timestamp: Date.now() // ✅ int64 用這個就對
             });
 
             console.log("🔥 FIREBASE WRITE OK");
 
         } catch (err) {
-            console.log("❌ FIREBASE ERROR:", err);
+            console.log("❌ FIREBASE WRITE ERROR:", err);
         }
     }
 
-    // -------------------------------
-    // LINE 回覆
-    // -------------------------------
+    // ---------------- LINE 回覆 ----------------
     await fetch("https://api.line.me/v2/bot/message/reply", {
         method: "POST",
         headers: {
