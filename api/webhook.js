@@ -17,11 +17,13 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// ================= Gemini AI =================
+// ================= Gemini 設定 =================
+const GEMINI_MODEL = "models/gemini-2.5-flash";
+
 async function askGemini(message) {
     try {
         const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -30,7 +32,16 @@ async function askGemini(message) {
                         {
                             parts: [
                                 {
-                                    text: `你是健康助理，分析症狀：${message}`
+                                    text: `
+你是一個健康助理（非醫療診斷），請用繁體中文回答：
+
+請提供：
+1. 可能原因（簡短）
+2. 建議處理方式
+3. 是否需要就醫判斷
+
+症狀：${message}
+`
                                 }
                             ]
                         }
@@ -41,27 +52,27 @@ async function askGemini(message) {
 
         const data = await res.json();
 
-        console.log("🔥 GEMINI RAW RESPONSE:", JSON.stringify(data, null, 2));
+        console.log("🔥 GEMINI RESPONSE:", JSON.stringify(data));
 
         if (data.error) {
-            return "❌ Gemini API錯誤：" + data.error.message;
+            return "❌ Gemini錯誤：" + data.error.message;
         }
 
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!text) {
-            return "❌ Gemini沒有回傳內容（可能被擋或API失敗）";
+            return "❌ AI沒有回傳內容（請稍後再試）";
         }
 
         return text;
 
     } catch (err) {
         console.log("❌ GEMINI ERROR:", err);
-        return "❌ Gemini請求失敗";
+        return "❌ AI系統錯誤，請稍後再試";
     }
 }
 
-// ================= 主 webhook =================
+// ================= LINE Webhook =================
 module.exports = async (req, res) => {
 
     console.log("🔥 WEBHOOK HIT");
@@ -79,23 +90,20 @@ module.exports = async (req, res) => {
 
     let replyText = "";
 
-    // ================= 說明 / hi =================
+    // ================= hi / 說明 =================
     if (msg.includes("hi") || msg.includes("說明")) {
 
         replyText =
-`歡迎使用「Line健指部｜健康AI助理」
+`👋 歡迎使用健康AI助理
 
-📌 功能：
+功能：
 1. 症狀分析
 2. 健康建議
-3. 個人紀錄查詢
+3. 紀錄查詢
 
-⚠️ 本系統僅供健康參考，不是醫療診斷
-
-輸入症狀即可開始使用，例如：
+輸入例如：
 👉 我發燒
 👉 頭痛`;
-
     }
 
     // ================= 查詢紀錄 =================
@@ -104,34 +112,34 @@ module.exports = async (req, res) => {
         try {
             const snapshot = await db.collection("health_logs").get();
 
-            let docs = [];
+            let list = [];
 
             snapshot.forEach(doc => {
                 const d = doc.data();
                 if (d.userId === userId) {
-                    docs.push(d);
+                    list.push(d);
                 }
             });
 
-            docs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            docs = docs.slice(0, 5);
+            list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+            list = list.slice(0, 5);
 
-            if (docs.length === 0) {
-                replyText = "目前沒有健康紀錄喔～";
+            if (list.length === 0) {
+                replyText = "目前沒有紀錄";
             } else {
-                replyText = "📊 最近健康紀錄：\n\n";
-                docs.forEach((d, i) => {
-                    replyText += `${i + 1}. ${d.message}（${d.risk || "無"}）\n`;
+                replyText = "📊 最近紀錄：\n\n";
+                list.forEach((d, i) => {
+                    replyText += `${i + 1}. ${d.message}\n`;
                 });
             }
 
         } catch (err) {
-            console.log("❌ QUERY ERROR:", err);
+            console.log("❌ FIREBASE QUERY ERROR:", err);
             replyText = "查詢失敗，請稍後再試";
         }
     }
 
-    // ================= Gemini AI 分析 =================
+    // ================= Gemini 分析 =================
     else {
 
         replyText = await askGemini(msg);
@@ -145,7 +153,7 @@ module.exports = async (req, res) => {
                 timestamp: Date.now()
             });
 
-            console.log("🔥 FIREBASE WRITE OK");
+            console.log("🔥 FIREBASE SAVE OK");
 
         } catch (err) {
             console.log("❌ FIREBASE WRITE ERROR:", err);
