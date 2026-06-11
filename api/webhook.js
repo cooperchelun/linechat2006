@@ -16,16 +16,18 @@ async function askGemini(message) {
 請用「超簡短、口語、像LINE聊天」的繁體中文回答。
 
 規則：
-- 最多6行
+- 最多 6 行
 - 不要長文章
-- 不要醫療論文
+- 不要醫療論文語氣
 - 不要條列太多
-- 直接重點
+- 直接講重點
 
-格式：
+輸出格式固定：
 
 💡可能原因：一句話
+
 🩺建議：一句話 + 1~2個做法
+
 ⚠️就醫判斷：一句話
 
 症狀：${message}
@@ -38,16 +40,9 @@ async function askGemini(message) {
             }
         );
 
-        // 🚨 HTTP錯誤先抓
-        if (!res.ok) {
-            const errText = await res.text();
-            console.log("❌ HTTP ERROR:", errText);
-            return "AI服務請求失敗，請稍後再試";
-        }
-
         const data = await res.json();
 
-        console.log("🔥 GEMINI RAW:", JSON.stringify(data, null, 2));
+        console.log("🔥 GEMINI RAW:", JSON.stringify(data));
 
         if (data.error) {
             return "AI錯誤：" + data.error.message;
@@ -56,7 +51,7 @@ async function askGemini(message) {
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!text) {
-            return "AI沒有回應內容（可能被安全機制擋掉）";
+            return "AI暫時沒有回應，請再試一次";
         }
 
         return text;
