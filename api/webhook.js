@@ -1,7 +1,7 @@
 const admin = require("firebase-admin");
 
 // =========================
-// 🔥 Firebase Init（防重複 + 防 JSON 錯）
+// 🔥 Firebase Init（防重複 + 防 JSON 錯誤）
 // =========================
 if (!admin.apps.length) {
     try {
@@ -20,10 +20,12 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 // =========================
-// 🚀 SAFE FIREBASE QUERY（完全不吃 index）
+// 🚀 SAFE FIREBASE LAYER（防炸核心）
 // =========================
 async function safeGetHealthLogs(db, userId, limit = 5) {
     try {
+        if (!userId) return { ok: false, data: [] };
+
         const snapshot = await db.collection("health_logs")
             .where("userId", "==", userId)
             .get();
@@ -35,12 +37,14 @@ async function safeGetHealthLogs(db, userId, limit = 5) {
 
             list.push({
                 message: d.message || "（無內容）",
-                timestamp: typeof d.timestamp === "number"
-                    ? d.timestamp
-                    : d.timestamp?.toMillis?.() || 0
+                timestamp:
+                    typeof d.timestamp === "number"
+                        ? d.timestamp
+                        : d.timestamp?.toMillis?.() || 0
             });
         });
 
+        // 不依賴 index（完全穩）
         list.sort((a, b) => b.timestamp - a.timestamp);
 
         return {
@@ -49,13 +53,13 @@ async function safeGetHealthLogs(db, userId, limit = 5) {
         };
 
     } catch (err) {
-        console.log("❌ FIREBASE ERROR:", err.message);
+        console.log("❌ SAFE FIREBASE ERROR:", err.message);
         return { ok: false, data: [] };
     }
 }
 
 // =========================
-// 🚀 WEBHOOK MAIN
+// 🚀 WEBHOOK ENTRY
 // =========================
 module.exports = async (req, res) => {
     console.log("🔥 WEBHOOK HIT");
@@ -68,19 +72,21 @@ module.exports = async (req, res) => {
         const userId = event.source?.userId;
         const replyToken = event.replyToken;
 
-        console.log("USER MSG:", msg);
+        console.log("USER:", msg);
 
         let replyText = "";
 
         // =========================
-        // 🧠 判斷查詢
+        // 🧠 ROUTER
         // =========================
         const isQuery = /紀錄|查詢|查看|我的紀錄|歷史/.test(msg);
 
         // =========================
-        // 📊 查詢模式（不寫入）
+        // 📊 查詢模式（Firebase）
         // =========================
         if (isQuery) {
+
+            console.log("📊 QUERY MODE");
 
             const result = await safeGetHealthLogs(db, userId, 5);
 
@@ -98,15 +104,17 @@ module.exports = async (req, res) => {
         }
 
         // =========================
-        // 🤖 AI 模式（寫入 Firebase）
+        // 🤖 Gemini 症狀分析
         // =========================
         else {
             replyText = await askGemini(msg);
 
+            // 💾 存資料（不影響主流程）
             try {
                 await db.collection("health_logs").add({
                     userId,
                     message: msg,
+                    reply: replyText,
                     timestamp: Date.now()
                 });
 
@@ -117,24 +125,29 @@ module.exports = async (req, res) => {
         }
 
         // =========================
-        // 📩 LINE REPLY（保護）
+        // 📩 LINE REPLY
         // =========================
         if (!replyText) replyText = "⚠️ 系統暫時無回應";
 
-        const lineRes = await fetch("https://api.line.me/v2/bot/message/reply", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-            },
-            body: JSON.stringify({
-                replyToken,
-                messages: [{
-                    type: "text",
-                    text: replyText.slice(0, 1800)
-                }]
-            })
-        });
+        const lineRes = await fetch(
+            "https://api.line.me/v2/bot/message/reply",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+                },
+                body: JSON.stringify({
+                    replyToken,
+                    messages: [
+                        {
+                            type: "text",
+                            text: replyText.slice(0, 1800) // LINE 安全限制
+                        }
+                    ]
+                })
+            }
+        );
 
         console.log("📡 LINE STATUS:", lineRes.status);
 
@@ -146,19 +159,21 @@ module.exports = async (req, res) => {
 };
 
 // =========================
-// 🤖 GEMINI（穩定 + debug 版）
+// 🤖 GEMINI FUNCTION
 // =========================
 async function askGemini(message) {
     try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
-        const res = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                contents: [{
-                    parts: [{
-                        text: `
+        const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [
+                        {
+                            parts: [
+                                {
+                                    text: `
 你是一個LINE健康助理AI。
 
 請用繁體中文、超簡短回答：
@@ -169,32 +184,23 @@ async function askGemini(message) {
 
 症狀：${message}
 `
-                    }]
-                }]
-            })
-        });
+                                }
+                            ]
+                        }
+                    ]
+                })
+            }
+        );
 
         const data = await res.json();
 
-        // 🔥 一定要看得到錯誤
-        console.log("🔥 GEMINI RESPONSE:", JSON.stringify(data));
-
-        if (data.error) {
-            return "❌ Gemini錯誤：" + data.error.message;
-        }
-
-        const text =
-            data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!text) {
-            console.log("❌ NO TEXT:", data);
-            return "❌ AI沒有回應內容";
-        }
-
-        return text;
+        return (
+            data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+            "AI暫時無法回應"
+        );
 
     } catch (err) {
         console.log("❌ GEMINI ERROR:", err.message);
-        return "❌ AI請求失敗";
+        return "AI錯誤，請稍後再試";
     }
 }
